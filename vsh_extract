@@ -1,0 +1,111 @@
+#!/bin/bash
+
+if [ $# -ne 2 ]; then
+    echo "usage: extract 'nom_arch' 'nom_rep"
+    exit -1
+fi
+
+#$1 is the archive file needed to be extracted
+#$2 is the dir ready to extract
+archive="archives/"$1
+root=$2
+echo "$root"
+
+echo "run file vsh_extract"
+
+#1 first we need to check if the .arch file exists
+#2 we should get the get the header of the archive
+#3 seperate dir and files
+#4 create files in current root first
+#4.1 remenber to chmod
+#4.2 get the body and put them in
+#5 mkdir dir
+#5.1 also chmod
+#6 enter first dir
+#7 redo 3-6
+#8 until all the dirs and files in header are created
+
+function getHeader() {
+    ligne=$(head -n 1 "$archive")
+    headerB=$(echo "$ligne" | cut -d ':' -f1)
+    headerE=$(expr $(echo "$ligne" | cut -d ':' -f2) - 1)
+    head -n "$headerE" "$archive" | tail -n+"$headerB"
+    echo "header get"
+}
+
+function getBody() {
+    bodyB=$(head -n 1 "$archive" | cut -d ':' -f2)
+    tail -n+"$bodyB" "$archive"
+}
+
+function setBody() {
+    begin=$1
+    length=$2
+    end=$(("$begin" + "$length" - 1))
+
+    getBody | head -n "$end" | tail -n+"$length"
+}
+
+function dirExists() {
+    #check if the dir exists
+    dir=$1
+
+    if [[ $(grep -c "^directory $dir/\?$" "$archive") -eq 1 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function getDirContents() {
+    dir=$1
+    if ! dirExists "$dir"; then
+        echo "Dir $1 not exist"
+        exit 1;
+    fi
+    #get start and end lines of the directory header
+    headerDirStart=$(($(grep -n "^directory $dir/\?$" "$archive" | cut -d ':' -f1) + 1))
+    headerDirEnd=$(($(tail -n +$headerDirStart "$archive" | grep -n -m 1 "@" | cut -d ':' -f1) + "$headerDirStart" - 2))
+    head -n $headerDirEnd "$archive" | tail -n+$headerDirStart
+}
+
+function changemod() {
+    file=$1
+    mod=$2
+    user=${mod:1:3}
+    group=${mod:4:3}
+    other=${mod:7:3}
+
+    chmod u="$user",g="$group",o="$other" "$file"
+}
+
+function extractDir() {
+    dir=$1
+    mkdir -p "$root/$dir"
+    getDirContents "$dir" |
+        while read -r line; do
+            name=$(echo "$line" | cut -d ' ' -f1)
+            droit=$(echo "$line" | cut -d ' ' -f2)
+            type=${droit:0:1}
+            if [[ $type == "d" ]]; then
+                changemod "$root/$dir" "${droit:1}"
+            else
+                contentB=$(echo "$line" | cut -d ' ' -f4)
+                contentL=$(echo "$line" | cut -d ' ' -f5)
+                setBody "$contentB" "$contentL" > "$root/$dir/$name"
+                changemod "$root/$dir/$name" "${droit:1}"
+            fi
+        done
+}
+
+function extractArch() {
+    grep "^directory" "$archive" |
+        while read -r dir; do
+            d=$(echo "$dir" | cut -d ' ' -f2)
+            echo "$d"
+            extractDir "$d"
+        done
+}
+
+extractArch
+echo "extract finished"

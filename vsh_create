@@ -1,0 +1,123 @@
+#! /bin/bash
+
+# En fait, j'ai trouvé que la façon dont je recherche des fichiers est différente de l'exemple.
+# ce qui entraîne une manière différente de lire les fichiers en premier
+# mais je ne sais pas comment utiliser la profondeur en premier pour parcourir correctement les répertoires.
+
+
+
+# check whether the file already exists
+# create the file
+# first deal with the head
+# we dont know the numbre of lignes now so we do nothing with this part now
+# get all dirs and files in current root
+# get their rights
+# first the pwd
+# dir_name rights size
+# file_name rights size ...
+# end the paragraph with @
+# enter premier dir
+# redo
+
+# then add the body
+# count the numbre of lignes
+# join them together to one file
+
+if [ $# -eq 1 ]; then
+    root="out/Exemple/Test"
+elif [ $# -ne 2 ]; then
+    echo "usage: create 'nom_arch'"
+    exit -1
+fi
+
+#$1 is the archive name
+archive_dir="archives"
+archive="$archive_dir/$1"
+root=$2
+
+
+tempHeader=$(mktemp /tmp/tempFile.XXXXXX)
+tempArch=$(mktemp /tmp/tempFile.XXXXXX)
+tempBody=$(mktemp /tmp/tempFile.XXXXXX)
+
+# get all the files and dirs in root
+while read -r dir; do
+    echo d $(echo $dir | cut -d '/' -f2-) >>$tempHeader
+    while read -r file; do
+        if [[ ! -z $file ]]; then
+            echo f $file >>$tempHeader
+        fi
+    done <<<$(find "$dir" -maxdepth 1 -mindepth 1)
+    echo @ >>$tempHeader
+    #just want to create arch in dir "out/Exemple/Test"
+done <<<$(find $root -type d)
+
+# calculer le longeur de header
+lengthHead=$(cat $tempHeader | wc -l)
+debutBody=$((lengthHead + 3))
+
+# La valeur par défaut est la ligne après la fin de header, et le contenu du fichier sera modifié une fois écrit
+finBody=$((debutBody + 1))
+
+echo 3:$debutBody >$tempArch
+echo >>$tempArch
+
+while read line; do
+    case ${line:0:1} in
+    d)
+        # afficher le directory quand il lire de la marque "d" faite avant
+        echo directory $(echo $line | cut -d ' ' -f2-) >>$tempArch
+        ;;
+
+    f)
+        fichier=$(echo $line | cut -d ' ' -f2-)
+        # dans ce dir, on dois obtenir tous les info des fichier
+        getInfo=$(ls -ld "$fichier")
+
+        droits=$(echo $getInfo | cut -d ' ' -f1)
+        taille=$(echo $getInfo | cut -d ' ' -f5)
+        nom=$(echo $getInfo | cut -d ' ' -f9-)
+
+        # obtenir uniquement le nom, pas le chemin
+        nom_unic=$(basename "$nom")
+
+        if [[ -f $fichier ]]; then
+            # Ici, nous voulons obtenir le contenu du fichier lu
+            # Enregistrez-le temporairement dans un fichier et ajoutez-le à l'arrière de header
+            # on dois calculer nombre de ligne des fichiers pour savoir le longeur de body
+            if [[ ! -s "$fichier" ]]; then
+                nbLignes=0
+            else
+                nbLignes=$(cat "$fichier" | wc -l)
+                ((nbLignes += 1))
+
+                cat "$fichier" >>$tempBody
+                echo >>$tempBody
+            fi
+
+            echo $nom_unic $droits $taille $((finBody - debutBody)) $((nbLignes)) >>$tempArch
+            ((finBody += nbLignes))
+        else
+            # Si ce n'est pas un fichier, sortie directement
+            echo $nom_unic $droits $taille >>$tempArch
+        fi
+        ;;
+
+    @)
+        echo @ >>$tempArch
+        ;;
+    *)
+        echo error $line
+        ;;
+    esac
+
+done <$tempHeader
+
+cat $tempBody >> $tempArch
+
+(
+    touch $archive
+    cat $tempArch > $archive
+)
+
+ rm /tmp/tempFile.*

@@ -1,0 +1,106 @@
+#! /bin/bash
+
+
+# Ce script implémente un serveur.  
+# Le script doit être invoqué avec l'argument :                                                 
+# PORT : le port sur lequel le serveur attend ses clients  
+
+echo "Bonjour, le serveur est fonctionne bien"
+echo "Vous pouvez opérer sur le client"
+
+if [ $# -ne 1 ]; then
+    echo "usage: $(basename $0) PORT"
+    exit -1
+fi
+
+PORT="$1"
+
+# Déclaration du tube
+
+FIFO="/tmp/$USER-fifo-$$"
+
+
+# Il faut détruire le tube quand le serveur termine pour éviter de
+# polluer /tmp.  On utilise pour cela une instruction trap pour être sur de
+# nettoyer même si le serveur est interrompu par un signal.
+
+function nettoyage() { rm -f "$FIFO"; }
+trap nettoyage EXIT
+
+
+# on crée le tube nommé
+[ -e "FIFO" ] || mkfifo "$FIFO"
+
+
+function accept-loop() {
+    while true; do
+	interaction < "$FIFO" | netcat -l -p "$PORT" > "$FIFO"
+    done
+}
+
+
+# La fonction interaction lit les commandes du client sur entrée standard 
+# et envoie les réponses sur sa sortie standard. 
+#
+# 	CMD arg1 arg2 ... argn                   
+#                     
+# alors elle invoque la fonction :
+#                                                                            
+#         commande-CMD arg1 arg2 ... argn                                      
+#                                                                              
+# si elle existe; sinon elle envoie une réponse d'erreur.                     
+
+function interaction() {
+    local cmd args
+    while true; do
+	read cmd args || exit -1
+	fun="commande-$cmd"
+	if [ "$(type -t $fun)" = "function" ]; then
+	    $fun $args
+	else
+	    commande-non-comprise $fun $args
+	fi
+    done
+}
+
+
+# Les fonctions implémentant les différentes commandes du serveur
+
+function commande-non-comprise () {
+	echo "Le serveur ne peut pas interpréter cette commande"
+	echo "Vous pouvez enter h pour assistance"
+}
+
+function commande-h () {
+	echo "Entre 'list' pour afficher toutes les archives"
+	echo "Entre 'browse arch' pour mode browse"
+	echo "Entre 'create arch' pour create arch file de root 'out/'"
+	echo "Entre 'extract arch out' pour mode extract 'out' est le repertoire"
+}
+
+function commande-list() {
+	echo "Here are the archives !"
+	for archive in $(ls -1 "archives"); do
+        	echo $archive
+    	done
+}
+
+function commande-browse() {
+	echo "You are in browse mod"
+	echo "Entrez 'quit' pour quitter le mode browse"
+	bash vsh_browse $1
+}
+
+function commande-create() {
+	echo "Running create mode"
+	bash vsh_create $1 $2
+}
+
+function commande-extract() {
+	echo "Running extract mode"
+	bash vsh_extract $1 $2
+}
+
+# On accepte et traite les connexions
+
+accept-loop

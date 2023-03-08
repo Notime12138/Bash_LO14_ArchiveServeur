@@ -1,0 +1,256 @@
+#! /bin/bash
+
+if [ $# -ne 1 ]; then
+    echo "usage: browse 'nom_arch'"
+    exit -1
+fi
+
+archive_dir="archives"
+archive="$archive_dir/$1"
+root=$(awk '/^directory/ {print $2; exit 0}' "$archive" | cut -d "/" -f1,2)
+echo "Votre root est : $root"
+#Example/test
+
+#to save where we are working now
+pwd=$root
+
+function getPath() {
+	path=$1
+	#get the path from $root
+	if [[ $(echo "$path" | grep "^/") || $(echo "$path" | grep "^$root") ]]; then
+		if [[ $path == "/" ]]; then
+			path=$root
+		fi
+	else
+		path="$pwd/$path"
+	fi
+	#remove "//"
+	path=$(echo "$path" | sed -e 's/\/\{2,\}/\//g')
+	#remove "./" after a "/"
+	path=$(echo "$path" | sed -e 's/\/\.\//\//g')
+	#replace 'A/B/../C' by 'A/C'
+	while [[ $(echo "$path" | grep -c '\.\.') -ne 0 ]]; do
+		path=$(echo "$path" | sed -e 's/[^\.\/]\{1,\}\/\.\.\/\{0,1\}//g')
+	done
+	#remove "/" at end and replace doublon
+	path=$(echo "$path" | sed -e 's:/*$::')
+	echo "$path"
+}
+
+function dirExists() {
+	#check if the dir exists
+	dir=$(echo "$1" | sed -e 's/\/$//')
+	if [[ $(grep -c "^directory $dir/\?" "$archive") -eq 0 ]]; then
+		return 1
+	else
+		return 0
+	fi
+}
+
+function fileExists() {
+	# check if there's file
+	if [[ "$(getFileInfo "$1")" == "0" ]]; then
+		return 1
+	else
+		return 0
+	fi
+}
+
+function getFileInfo() {
+	# get info
+	path="$(getPath "$1")"
+	file=$(echo "$path" | awk -F/ '{print $NF}')
+	dir=$(echo "$path" | sed -e 's/'$file'$//')
+	if dirExists "$dir"; then
+		echo $(getDirContents $dir | awk -v file=$file '
+        NF == 5 && $1 == file {
+            flag = 1;
+            info = $0;
+            exit 0;
+        }
+        END {
+            if (flag == 1) {
+                print info
+            } else {
+                    print "0"
+                }
+            }
+        ')
+	else
+		echo "0"
+	fi
+}
+
+function getDirContents() {
+	dir=$1
+	#get start and end lines of the directory header
+	headerDirStart=$(($(grep -n "^directory $dir/\?$" "$archive" | cut -d ':' -f1) + 1))
+	headerDirEnd=$(($(tail -n +$headerDirStart "$archive" | grep -n -m 1 "@" | cut -d ':' -f1) + "$headerDirStart" - 2))
+	head -n $headerDirEnd "$archive" | tail -n+$headerDirStart
+}
+
+#use cmd pwd/ls/cd/cat/rm/touch/mkdir
+function vsh_pwd() {
+	dispdir=$(echo $pwd | sed "s:$root::g")
+	echo "$dispdir"
+}
+
+function vsh_ls() {
+	arg=$1
+	path=$(getPath "$1")
+	#check all the dir
+	if dirExists "$path"; then
+		#check files in the dir and export
+		dir=$(grep "$path" "$archive" | sed "s:directory $path/::g" | sed "s:directory $root::g" | sed 'y;/;:;' | awk -F":" '{print $1}' | awk '!a[$0]++' | sed '/^$/d' | sed 's:$:/:g')
+		Dir=$(echo "$path" | sed 's:/:\\/:g')
+		files=$(awk "/^directory $Dir(\/$|$)/,/^@$/ {print}" "$archive" | awk 'NF==5 && $2 !~ /x/ {print $1}')
+		exe=$(awk "/^directory $Dir(\/$|$)/,/^@$/ {print}" $archive | awk 'NF==5 && $2 ~ /x/ {print $1}' | sed 's/$/*/g')
+		path=$(echo "$path" | sed 's:\\/:/:g')
+		echo $dir $exe $files
+	else
+		if fileExists "$path"; then
+			echo "$1"
+		else
+			echo "can't find the dir"
+		fi
+	fi
+}
+
+function vsh_cd() {
+	arg=$1
+	path=$(getPath "$1")
+	#whether the dir exists
+	if dirExists "$path"; then
+		echo "cd $1"
+		pwd=$path
+	else
+		#can't cd a file
+		if fileExists "$path"; then
+			echo "pleace enter a dir"
+		else
+			echo "can't find $1"
+		fi
+	fi
+}
+
+function vsh_cat() {
+	arg=$1
+	path="out/"$pwd"/"$1
+	#whether the file exists
+	if [ -e $path ];then
+		echo "cat $1"
+		cat $path
+	else
+		echo "can't find $1"
+	fi
+}
+
+function vshcat() {
+	echo "cat $1"
+	arg=$1
+	path=(getPath "$arg")
+	#whether the file exists
+	if fileExists $path; then
+		echo "cat this file"
+		#get thing needed to echo
+		infos=$(getFileInfo $path)
+		# like size
+		size=$(echo $infos | awk '{print $5}')
+		bodyDebut=$(grep "[0-9]\{1,\}:[0-9]\{1,\}" $archive | cut -d ":" -f2)
+		fileDebut=$(echo $infos | awk '{print $4}')
+
+		if [[ size -gt 0 ]]; then
+			debut=$((fileDebut + bodyDebut - 1))
+			fin=$((debut + size - 1))
+			sed -n "${debut},${fin}p" $archive
+		# if it's empty
+		else
+			echo "$1 is empty"
+		fi
+	else
+		#can't cat a dir
+		if dirExists $path; then
+			echo "pleace enter a file"
+		else
+			echo "can't find $1"
+		fi
+	fi
+}
+
+function vsh_rm() {
+	arg=$1
+	path="out/"$pwd"/"$1
+	#check the file exists
+	if [ -e $path ];then
+		#remove then
+		echo "rm $1"
+		rm -rf $path
+	else
+		echo "can't find $1"
+	fi
+}
+
+function vsh_touch() {
+	arg=$1
+	path="out/"$pwd"/"$1
+	#check it's a dir or a file
+	#remove then
+	if [ ! -e $path ];then
+		echo "touch $1"
+		touch $path
+	else
+		echo "can't touch $1"
+	fi
+	#touch the file
+}
+
+function vsh_mkdir() {
+	echo "mkdir $1"
+	arg=$1
+	path="out/"$pwd"/"$1
+	#check it's a dir or a file
+	if [ ! -e $path ];then
+		mkdir $path
+		#else not a file or a dir
+	else
+		echo "can't mkdir $1"
+	fi
+	#create the dir
+}
+
+while true; do
+	echo -e "vsh:> \c"
+	read -a input 
+	cmd="${input[0]}"
+	arg=("${input[@]:1}") 
+	case $cmd in
+	pwd)
+		vsh_pwd
+		;;
+	ls)
+		vsh_ls "$arg"
+		;;
+	cd)
+		vsh_cd "$arg"
+		;;
+	cat)
+		vsh_cat "$arg"
+		;;
+	rm)
+		vsh_rm "$arg"
+		bash vsh_create $1
+		;;
+	touch)
+		vsh_touch "$arg"
+		bash vsh_create $1
+		;;
+	mkdir)
+		vsh_mkdir "$arg"
+		bash vsh_create $1
+		;;
+	quit)
+		echo "Quitter mode browse, vous pouvez utiliser d'autre commande"
+		exit 1
+		;;
+	esac
+done
